@@ -1,0 +1,1950 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Échappée — Grand Tour</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+  body { background: #a8c7ba; font-family: system-ui, sans-serif; }
+  canvas { display: block; }
+
+  .panel {
+    position: fixed;
+    z-index: 5;
+    color: #263d39;
+    background: rgba(255, 250, 239, .87);
+    border: 1px solid #ffffffd9;
+    border-radius: 18px;
+    box-shadow: 0 12px 35px #203c3435;
+    backdrop-filter: blur(12px);
+  }
+
+  #hud { top: 15px; left: 15px; padding: 13px 18px; min-width: 195px; }
+  #brand { font-size: 11px; font-weight: 900; letter-spacing: .17em; }
+  #speed { display: block; font-size: 39px; line-height: 1.15; font-weight: 850; }
+  #place { font-size: 14px; font-weight: 800; }
+  #info { margin-top: 5px; font-size: 12px; opacity: .8; }
+
+  #regions {
+    top: 15px; right: 15px;
+    width: min(310px, calc(100vw - 235px));
+    padding: 11px;
+  }
+  #regions strong {
+    display: block;
+    margin: 2px 4px 8px;
+    font-size: 12px;
+    letter-spacing: .06em;
+  }
+  #regionButtons { display: flex; flex-wrap: wrap; gap: 5px; }
+
+  button {
+    touch-action: none;
+    user-select: none;
+    cursor: pointer;
+    border: 1px solid #ffffffd9;
+    border-radius: 10px;
+    color: #2e4742;
+    background: #fffdf6ed;
+    font: 750 12px system-ui;
+    box-shadow: 0 3px 12px #263d3021;
+  }
+  #regionButtons button { padding: 7px 9px; }
+  button.selected, button.down, button:active { background: #f0b482; }
+
+  #controls {
+    position: fixed;
+    z-index: 6;
+    left: 15px; right: 15px; bottom: 15px;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  #controls > div { display: flex; gap: 7px; align-items: end; }
+  #controls button {
+    pointer-events: auto;
+    min-width: 64px;
+    height: 58px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+  #controls #pedal { min-width: 94px; background: #f7d5ac; }
+  #controls #sprint { background: #cde7d1; }
+
+  #hint {
+    position: fixed;
+    z-index: 5;
+    bottom: 85px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: calc(100vw - 25px);
+    padding: 8px 12px;
+    border-radius: 13px;
+    background: #fff9e8c9;
+    color: #344944;
+    font-size: 11px;
+    text-align: center;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  #error {
+    display: none;
+    position: fixed;
+    z-index: 20;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 430px;
+    padding: 20px;
+    border-radius: 15px;
+    background: #fff4e9;
+    color: #5a2929;
+  }
+
+  @media (max-width: 700px) {
+    #hud { padding: 10px 12px; min-width: 145px; }
+    #speed { font-size: 28px; }
+    #regions { width: 175px; }
+    #regionButtons button { padding: 5px 7px; font-size: 10px; }
+    #hint { display: none; }
+    #controls button { min-width: 47px; height: 53px; font-size: 10px; }
+    #controls #pedal { min-width: 72px; }
+  }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="hud" class="panel">
+  <div id="brand">ÉCHAPPÉE · GRAND TOUR</div>
+  <span id="speed">0 km/h</span>
+  <div id="place">Forêt profonde</div>
+  <div id="info">0,00 km · terrain doux →</div>
+</div>
+
+<div id="regions" class="panel">
+  <strong>CHOISIR UNE AMBIANCE</strong>
+  <div id="regionButtons"></div>
+</div>
+
+<div id="hint">
+  Z/W : pédaler · Maj : sprint · Espace : freiner ·
+  Q/← : droite · D/→ : gauche · 1–7 : changer de région
+</div>
+
+<div id="controls">
+  <div>
+    <button data-hold="right">↶ DROITE</button>
+    <button data-hold="left">GAUCHE ↷</button>
+  </div>
+  <div>
+    <button id="sprint" data-hold="sprint">SPRINT</button>
+    <button data-hold="brake">FREIN</button>
+    <button id="pedal" data-hold="pedal">PÉDALER</button>
+  </div>
+</div>
+
+<div id="error"></div>
+
+<script type="module">
+import * as THREE from "three";
+
+try {
+  // ============================================================
+  // MONDE
+  // ============================================================
+
+  const REGIONS = [
+    {
+      name: "Forêt profonde", button: "🌲 Forêt", type: "forest",
+      ground: "#587960", ground2: "#41674d",
+      sky: "#a8d2c4", fog: "#aac8bb",
+      leaves: ["#245b43", "#34734f", "#50835c", "#638b58"],
+      sun: "#fff0c9"
+    },
+    {
+      name: "Campagne dorée", button: "🌾 Campagne", type: "country",
+      ground: "#94a76c", ground2: "#baaa70",
+      sky: "#b8dce9", fog: "#bfd9ce",
+      leaves: ["#4d7e4a", "#729653", "#93a86d"],
+      sun: "#fff0c8"
+    },
+    {
+      name: "Route de Provence", button: "💜 Provence", type: "provence",
+      ground: "#a19d73", ground2: "#bca97a",
+      sky: "#bdd9e8", fog: "#d6d5c2",
+      leaves: ["#476b4d", "#627a54", "#78835d"],
+      sun: "#ffe9bd"
+    },
+    {
+      name: "Corniche marine", button: "🌊 Côte", type: "coast",
+      ground: "#91a986", ground2: "#bdad8e",
+      sky: "#aed7eb", fog: "#bfd9df",
+      leaves: ["#467960", "#649476", "#8da68b"],
+      sun: "#fff2d7"
+    },
+    {
+      name: "Canyon rouge", button: "🏜️ Canyon", type: "desert",
+      ground: "#bd906a", ground2: "#cb9b73",
+      sky: "#e5bea3", fog: "#dfbaa1",
+      leaves: ["#718361", "#8a9065", "#a0966a"],
+      sun: "#ffddb8"
+    },
+    {
+      name: "Cols alpins", button: "🏔️ Alpes", type: "alps",
+      ground: "#879e8b", ground2: "#becab5",
+      sky: "#a9ccdf", fog: "#c1d6db",
+      leaves: ["#356c55", "#4f8368", "#789b83"],
+      sun: "#f7f3e2"
+    },
+    {
+      name: "Forêt d'automne", button: "🍁 Automne", type: "autumn",
+      ground: "#827353", ground2: "#aa8c5e",
+      sky: "#d9bfa9", fog: "#ccb39e",
+      leaves: ["#a9663f", "#d68b49", "#c8a44d", "#835f49"],
+      sun: "#ffe0b6"
+    }
+  ];
+
+  const REGION_LENGTH = 1600;
+  const TILE = 180;
+
+  // 13 tuiles devant : plus de 2 km de paysage généré.
+  const TILES_AHEAD = 13;
+  const TILES_BEHIND = 3;
+  const ROAD_HALF = 5.7;
+
+  const clamp = THREE.MathUtils.clamp;
+  const lerp = THREE.MathUtils.lerp;
+
+  function hash(n) {
+    const v = Math.sin(n * 127.1 + 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  }
+
+  function rnd(seed, salt = 0) {
+    return hash(seed * 13.37 + salt * 57.13);
+  }
+
+  function smoothstep(a, b, v) {
+    const t = clamp((v - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+
+  function regionIndex(z) {
+    return Math.floor(Math.max(0, z) / REGION_LENGTH) %
+      REGIONS.length;
+  }
+
+  function roadX(z) {
+    return Math.sin(z * .0032) * 27 +
+      Math.sin(z * .0087) * 9 +
+      Math.sin(z * .00115) * 24;
+  }
+
+  function roadHeight(z) {
+    return 8 +
+      Math.sin(z * .0039) * 9 +
+      Math.sin(z * .009) * 3.5 +
+      Math.sin(z * .0013) * 12;
+  }
+
+  function height(x, z) {
+    const away = Math.abs(x - roadX(z));
+    const blend = smoothstep(7, 32, away);
+
+    const hills =
+      Math.sin(x * .025 + z * .011) * 2.2 +
+      Math.sin(x * .010 - z * .019) * 5 +
+      Math.sin(x * .046 + z * .037) * .65;
+
+    return roadHeight(z) +
+      blend * (hills + Math.max(0, away - 55) * .045);
+  }
+
+  // ============================================================
+  // RENDU
+  // ============================================================
+
+  const scene = new THREE.Scene();
+
+  const camera = new THREE.PerspectiveCamera(
+    68, innerWidth / innerHeight, .15, 3000
+  );
+
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: "high-performance"
+  });
+
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.6));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.32;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.prepend(renderer.domElement);
+
+  const skyColor = new THREE.Color(REGIONS[0].sky);
+  const fogColor = new THREE.Color(REGIONS[0].fog);
+
+  scene.background = skyColor;
+
+  // Brume plus légère : on distingue les reliefs très loin.
+  scene.fog = new THREE.FogExp2(fogColor, .00105);
+
+  const ambient = new THREE.HemisphereLight(
+    "#eaf4ff", "#536d52", 2.15
+  );
+  scene.add(ambient);
+
+  const sun = new THREE.DirectionalLight("#fff0c9", 2.25);
+  sun.position.set(-65, 115, 75);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+
+  // Les ombres restent concentrées autour du joueur.
+  sun.shadow.camera.left = -110;
+  sun.shadow.camera.right = 110;
+  sun.shadow.camera.top = 110;
+  sun.shadow.camera.bottom = -110;
+  sun.shadow.camera.near = 1;
+  sun.shadow.camera.far = 330;
+  sun.shadow.bias = -.00035;
+  sun.shadow.normalBias = .035;
+  scene.add(sun, sun.target);
+
+  const material = (color, options = {}) =>
+    new THREE.MeshStandardMaterial({
+      color,
+      roughness: .86,
+      ...options
+    });
+
+  const MAT = {
+    asphalt: material("#535a59", { roughness: .98 }),
+    shoulder: material("#b4aa90"),
+    stripe: material("#f4e7ca"),
+    dark: material("#202a2b"),
+    rubber: material("#1d2425"),
+    metal: material("#bbc9c7", {
+      metalness: .72, roughness: .28
+    }),
+    chain: material("#8c9999", {
+      metalness: .72, roughness: .36
+    }),
+    skin: material("#c78c6e"),
+    white: material("#f1eee5"),
+    rock: material("#8c9691"),
+    wood: material("#685642"),
+    flower: material("#e5c889"),
+    lavender: material("#9879b2"),
+    glass: material("#203d4c", {
+      metalness: .35, roughness: .18
+    })
+  };
+
+  const GEO = {
+    box: new THREE.BoxGeometry(1, 1, 1),
+    trunk: new THREE.CylinderGeometry(1, 1, 1, 6),
+    cone: new THREE.ConeGeometry(1, 1, 7),
+    blob: new THREE.IcosahedronGeometry(1, 0),
+    smoothBlob: new THREE.SphereGeometry(1, 12, 8),
+    tire: new THREE.TorusGeometry(.68, .055, 8, 32),
+    rim: new THREE.TorusGeometry(.58, .019, 6, 32),
+    chainring: new THREE.TorusGeometry(.17, .018, 5, 18)
+  };
+
+  function addMesh(parent, geometry, mat, pos, scale, shadows = true) {
+    const object = new THREE.Mesh(geometry, mat);
+    object.position.set(...pos);
+    object.scale.set(...scale);
+    object.castShadow = shadows;
+    object.receiveShadow = true;
+    parent.add(object);
+    return object;
+  }
+
+  function tube(parent, a, b, radius, mat, segments = 8) {
+    const start = new THREE.Vector3(...a);
+    const end = new THREE.Vector3(...b);
+    const delta = end.clone().sub(start);
+
+    const object = new THREE.Mesh(
+      new THREE.CylinderGeometry(
+        radius, radius, delta.length(), segments
+      ),
+      mat
+    );
+
+    object.position.copy(start).add(end).multiplyScalar(.5);
+    object.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      delta.normalize()
+    );
+    object.castShadow = true;
+    parent.add(object);
+    return object;
+  }
+
+  function repositionTube(object, a, b) {
+    const start = new THREE.Vector3(...a);
+    const end = new THREE.Vector3(...b);
+    const delta = end.clone().sub(start);
+
+    object.position.copy(start).add(end).multiplyScalar(.5);
+    object.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      delta.clone().normalize()
+    );
+
+    object.scale.y =
+      delta.length() / object.geometry.parameters.height;
+  }
+
+  // ============================================================
+  // ROUTE ET PAYSAGES GÉNÉRÉS À MESURE QU'ON AVANCE
+  // ============================================================
+
+  const terrainMaterials = REGIONS.map(region =>
+    material("#ffffff", {
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      roughness: 1
+    })
+  );
+
+  const foliageMaterials = REGIONS.map(region =>
+    material(region.leaves[0], {
+      side: THREE.DoubleSide,
+      roughness: 1
+    })
+  );
+
+  const activeTiles = new Map();
+
+  function makeTerrain(z0, z1, region, far = false) {
+    const rows = far ? 11 : 19;
+    const columns = far ? 17 : 29;
+    const halfWidth = far ? 330 : 210;
+
+    const vertices = [];
+    const colors = [];
+    const indices = [];
+
+    const base = new THREE.Color(region.ground);
+    const alternate = new THREE.Color(region.ground2);
+    const color = new THREE.Color();
+
+    for (let j = 0; j <= rows; j++) {
+      const z = lerp(z0, z1, j / rows);
+
+      for (let i = 0; i <= columns; i++) {
+        const lateral = lerp(
+          -halfWidth, halfWidth, i / columns
+        );
+        const x = roadX(z) + lateral;
+
+        vertices.push(x, height(x, z) - .18, z);
+
+        const variation =
+          .28 +
+          Math.sin(x * .047 + z * .032) * .21 +
+          Math.sin(x * .083 - z * .051) * .12;
+
+        color.copy(base).lerp(
+          alternate, clamp(variation, 0, .85)
+        );
+
+        colors.push(color.r, color.g, color.b);
+
+        if (i < columns && j < rows) {
+          const k = j * (columns + 1) + i;
+
+          indices.push(
+            k, k + columns + 1, k + 1,
+            k + 1, k + columns + 1, k + columns + 2
+          );
+        }
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(vertices, 3)
+    );
+    geometry.setAttribute(
+      "color",
+      new THREE.Float32BufferAttribute(colors, 3)
+    );
+
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+
+    const ground = new THREE.Mesh(
+      geometry,
+      terrainMaterials[REGIONS.indexOf(region)]
+    );
+
+    ground.receiveShadow = true;
+    ground.userData.disposeGeometry = true;
+
+    return ground;
+  }
+
+  function makeRibbon(
+    z0, z1, width, offset, lift, mat, step = 5
+  ) {
+    const count = Math.ceil((z1 - z0) / step);
+    const vertices = [];
+    const indices = [];
+
+    for (let i = 0; i <= count; i++) {
+      const z = lerp(z0, z1, i / count);
+      const dx = (
+        roadX(z + .3) - roadX(z - .3)
+      ) / .6;
+
+      const length = Math.hypot(1, dx);
+      const nx = 1 / length;
+      const nz = -dx / length;
+
+      for (const side of [-1, 1]) {
+        const lateral = offset + side * width / 2;
+        const x = roadX(z) + nx * lateral;
+        const zz = z + nz * lateral;
+
+        vertices.push(x, height(x, zz) + lift, zz);
+      }
+
+      if (i < count) {
+        const k = i * 2;
+
+        indices.push(
+          k, k + 2, k + 1,
+          k + 1, k + 2, k + 3
+        );
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(vertices, 3)
+    );
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+
+    const object = new THREE.Mesh(geometry, mat);
+    object.receiveShadow = true;
+    object.userData.disposeGeometry = true;
+
+    return object;
+  }
+
+  function addInstances(
+    parent, geometry, mat, items, castShadow = false
+  ) {
+    if (!items.length) return;
+
+    const object = new THREE.InstancedMesh(
+      geometry, mat, items.length
+    );
+
+    const dummy = new THREE.Object3D();
+
+    items.forEach((item, index) => {
+      dummy.position.set(item.x, item.y, item.z);
+      dummy.rotation.y = item.rotation || 0;
+      dummy.scale.set(item.sx, item.sy, item.sz);
+      dummy.updateMatrix();
+
+      object.setMatrixAt(index, dummy.matrix);
+
+      if (item.color) {
+        object.setColorAt(
+          index, new THREE.Color(item.color)
+        );
+      }
+    });
+
+    object.instanceMatrix.needsUpdate = true;
+
+    if (object.instanceColor) {
+      object.instanceColor.needsUpdate = true;
+    }
+
+    object.castShadow = castShadow;
+    object.receiveShadow = true;
+    object.computeBoundingSphere();
+
+    parent.add(object);
+  }
+
+  function addDecor(group, tileId, z0, z1, region, far) {
+    const type = region.type;
+    const forest = type === "forest" || type === "autumn";
+
+    const trunks = [];
+    const pineBottom = [];
+    const pineTop = [];
+    const shrubs = [];
+    const stones = [];
+    const smallDetails = [];
+
+    // Au loin : moins d'objets, mais toujours une forêt visible.
+    const count = forest
+      ? (far ? 170 : 570)
+      : type === "alps"
+        ? (far ? 75 : 165)
+        : (far ? 65 : 125);
+
+    for (let i = 0; i < count; i++) {
+      const seed = tileId * 1079 + i * 19.71;
+      const z = z0 + rnd(seed, 1) * (z1 - z0);
+      const side = rnd(seed, 2) > .5 ? 1 : -1;
+      const distance = forest
+        ? 8.6 + Math.pow(rnd(seed, 3), 1.5) * 175
+        : 11 + rnd(seed, 3) * 195;
+
+      const x = roadX(z) + side * distance;
+      const y = height(x, z);
+      const chance = rnd(seed, 4);
+      const size = 4.7 + rnd(seed, 5) * 9;
+
+      const isTree = forest
+        ? chance > .11
+        : type === "desert"
+          ? chance > .87
+          : chance > .36;
+
+      if (isTree) {
+        const pine =
+          type === "forest" ||
+          type === "alps" ||
+          type === "provence" ||
+          (type === "country" && chance > .7);
+
+        const trunkHeight = pine
+          ? size * .72
+          : size * .52;
+
+        trunks.push({
+          x,
+          y: y + trunkHeight / 2,
+          z,
+          sx: pine ? .23 : .33,
+          sy: trunkHeight,
+          sz: pine ? .23 : .33,
+          color: type === "autumn"
+            ? "#74513e"
+            : "#615a45"
+        });
+
+        const leafColor = region.leaves[
+          Math.floor(
+            rnd(seed, 6) * region.leaves.length
+          )
+        ];
+
+        if (pine) {
+          const radius = type === "provence"
+            ? .95
+            : size * .24;
+
+          pineBottom.push({
+            x,
+            y: y + trunkHeight + size * .13,
+            z,
+            sx: radius,
+            sy: size * .68,
+            sz: radius,
+            color: leafColor
+          });
+
+          pineTop.push({
+            x,
+            y: y + trunkHeight + size * .39,
+            z,
+            sx: radius * .68,
+            sy: size * .54,
+            sz: radius * .68,
+            color: leafColor
+          });
+        } else {
+          shrubs.push({
+            x,
+            y: y + trunkHeight + size * .2,
+            z,
+            sx: size * .39,
+            sy: size * .42,
+            sz: size * .37,
+            color: leafColor
+          });
+        }
+      } else if (chance > .045) {
+        shrubs.push({
+          x,
+          y: y + .7,
+          z,
+          sx: .7 + rnd(seed, 7),
+          sy: .6 + rnd(seed, 8),
+          sz: .7 + rnd(seed, 9),
+          color: region.leaves[
+            Math.floor(
+              rnd(seed, 10) * region.leaves.length
+            )
+          ]
+        });
+      } else {
+        stones.push({
+          x,
+          y: y + .4,
+          z,
+          sx: .7 + rnd(seed, 11) * 1.8,
+          sy: .4 + rnd(seed, 12),
+          sz: .7 + rnd(seed, 13) * 1.5,
+          color: type === "desert"
+            ? "#a67659"
+            : "#89928d"
+        });
+      }
+    }
+
+    if (!far) {
+      const step = forest ? 4.8 : 9;
+
+      // Lisière rapprochée : buissons, fleurs et pierres.
+      for (let z = z0 + 3; z < z1 - 2; z += step) {
+        for (const side of [-1, 1]) {
+          const seed =
+            z * 17 + tileId * 83 + side * 7;
+
+          const x =
+            roadX(z) +
+            side * (7.8 + rnd(seed, 1) * 6);
+
+          const zz = z + rnd(seed, 2) * 3;
+          const y = height(x, zz);
+
+          if (type === "desert" || type === "alps") {
+            stones.push({
+              x, y: y + .36, z: zz,
+              sx: .6 + rnd(seed, 3) * 1.4,
+              sy: .4 + rnd(seed, 4) * .7,
+              sz: .6 + rnd(seed, 5),
+              color: type === "desert"
+                ? "#a8775b"
+                : "#9ca7a3"
+            });
+          } else {
+            shrubs.push({
+              x, y: y + .38, z: zz,
+              sx: .5 + rnd(seed, 3) * .5,
+              sy: .45 + rnd(seed, 4) * .4,
+              sz: .5 + rnd(seed, 5) * .5,
+              color: type === "provence"
+                ? "#8c78ad"
+                : region.leaves[
+                    Math.floor(
+                      rnd(seed, 6) *
+                      region.leaves.length
+                    )
+                  ]
+            });
+
+            if (rnd(seed, 7) > .5) {
+              smallDetails.push({
+                x: x + side * .9,
+                y: height(x + side * .9, zz) + .25,
+                z: zz,
+                sx: .25,
+                sy: .35,
+                sz: .25,
+                color: type === "provence"
+                  ? "#9978b7"
+                  : "#e4c893"
+              });
+            }
+          }
+        }
+      }
+
+      for (let z = z0 + 12; z < z1; z += 33) {
+        for (const side of [-1, 1]) {
+          const x = roadX(z) + side * 7.5;
+          const y = height(x, z);
+
+          addMesh(
+            group, GEO.box, MAT.white,
+            [x, y + .43, z],
+            [.13, .86, .13]
+          );
+
+          addMesh(
+            group, GEO.box, MAT.dark,
+            [x, y + .65, z + .08],
+            [.14, .16, .05],
+            false
+          );
+        }
+      }
+    }
+
+    const foliage =
+      foliageMaterials[REGIONS.indexOf(region)];
+
+    addInstances(
+      group, GEO.trunk, MAT.wood,
+      trunks, !far
+    );
+    addInstances(
+      group, GEO.cone, foliage,
+      pineBottom, !far
+    );
+    addInstances(
+      group, GEO.cone, foliage,
+      pineTop, false
+    );
+    addInstances(
+      group, GEO.blob, foliage,
+      shrubs, false
+    );
+    addInstances(
+      group, GEO.blob, MAT.rock,
+      stones, false
+    );
+    addInstances(
+      group, GEO.cone,
+      type === "provence"
+        ? MAT.lavender
+        : MAT.flower,
+      smallDetails, false
+    );
+  }
+
+  function createTile(tileId, centerId) {
+    const z0 = tileId * TILE;
+    const z1 = z0 + TILE;
+
+    const region =
+      REGIONS[regionIndex((z0 + z1) / 2)];
+
+    const far = tileId > centerId + 4;
+    const group = new THREE.Group();
+
+    group.add(makeTerrain(z0, z1, region, far));
+
+    group.add(makeRibbon(
+      z0, z1,
+      ROAD_HALF * 2 + 2.4,
+      0, .022, MAT.shoulder,
+      far ? 9 : 4
+    ));
+
+    group.add(makeRibbon(
+      z0, z1,
+      ROAD_HALF * 2,
+      0, .06, MAT.asphalt,
+      far ? 9 : 4
+    ));
+
+    for (const side of [-1, 1]) {
+      group.add(makeRibbon(
+        z0, z1,
+        .13,
+        side * (ROAD_HALF - .48),
+        .09,
+        MAT.stripe,
+        far ? 10 : 5
+      ));
+    }
+
+    if (!far) {
+      for (let zz = z0 + 8; zz < z1 - 3; zz += 14) {
+        group.add(makeRibbon(
+          zz,
+          Math.min(zz + 5.5, z1),
+          .13,
+          0,
+          .095,
+          MAT.stripe,
+          3
+        ));
+      }
+    }
+
+    addDecor(
+      group, tileId, z0, z1, region, far
+    );
+
+    scene.add(group);
+    activeTiles.set(tileId, { group, far });
+  }
+
+  function removeTile(tileId) {
+    const tile = activeTiles.get(tileId);
+    if (!tile) return;
+
+    tile.group.traverse(object => {
+      if (object.userData.disposeGeometry) {
+        object.geometry.dispose();
+      }
+    });
+
+    scene.remove(tile.group);
+    activeTiles.delete(tileId);
+  }
+
+  function updateTiles(z) {
+    const center = Math.floor(z / TILE);
+
+    for (
+      let id = center - TILES_BEHIND;
+      id <= center + TILES_AHEAD;
+      id++
+    ) {
+      if (id < 0) continue;
+
+      const shouldBeFar = id > center + 4;
+      const existing = activeTiles.get(id);
+
+      // Une tuile lointaine devient détaillée à l'approche.
+      if (existing && existing.far !== shouldBeFar) {
+        removeTile(id);
+      }
+
+      if (!activeTiles.has(id)) {
+        createTile(id, center);
+      }
+    }
+
+    for (const id of [...activeTiles.keys()]) {
+      if (
+        id < center - TILES_BEHIND ||
+        id > center + TILES_AHEAD
+      ) {
+        removeTile(id);
+      }
+    }
+  }
+
+  // ============================================================
+  // MONTAGNES LOINTAINES : HORIZON VISUEL SUPPLÉMENTAIRE
+  // ============================================================
+
+  const horizon = new THREE.Group();
+  scene.add(horizon);
+
+  const mountainMaterial = material("#93aba5", {
+    flatShading: true,
+    roughness: 1
+  });
+  const snowyMaterial = material("#dce4df", {
+    flatShading: true,
+    roughness: 1
+  });
+
+  for (let i = 0; i < 28; i++) {
+    const side = i % 2 === 0 ? -1 : 1;
+    const distance = 570 + (i % 5) * 150;
+    const lateral = side * (
+      210 + (i % 6) * 110
+    );
+    const size = 80 + rnd(i, 1) * 150;
+
+    const mountain = addMesh(
+      horizon,
+      GEO.cone,
+      mountainMaterial,
+      [lateral, -20 + size * .37, distance],
+      [size * .55, size, size * .58],
+      false
+    );
+
+    mountain.rotation.y = rnd(i, 2) * Math.PI;
+
+    if (i % 3 !== 0) {
+      addMesh(
+        horizon,
+        GEO.cone,
+        snowyMaterial,
+        [lateral, -20 + size * .76, distance],
+        [
+          size * .16,
+          size * .28,
+          size * .17
+        ],
+        false
+      );
+    }
+  }
+
+  // ============================================================
+  // CYCLISTE DE COURSE DÉTAILLÉ ET ANIMÉ
+  // ============================================================
+
+  function makeCyclist(
+    frameColor,
+    jerseyColor,
+    helmetColor
+  ) {
+    const root = new THREE.Group();
+    const body = new THREE.Group();
+    root.add(body);
+
+    const frameMat = material(frameColor, {
+      metalness: .45,
+      roughness: .34
+    });
+    const jerseyMat = material(jerseyColor);
+    const helmetMat = material(helmetColor);
+    const shortsMat = material("#202a32");
+    const shoesMat = material("#e9e9dd");
+    const glovesMat = material("#252a2c");
+    const trimMat = material("#eee4c6");
+
+    // Roues orientées dans le sens de déplacement (+Z).
+    const wheels = [];
+
+    for (const wz of [-.92, .97]) {
+      const wheel = new THREE.Group();
+      wheel.position.set(0, .69, wz);
+
+      const tire = new THREE.Mesh(
+        GEO.tire, MAT.rubber
+      );
+      tire.rotation.y = Math.PI / 2;
+      tire.castShadow = true;
+      wheel.add(tire);
+
+      const rim = new THREE.Mesh(
+        GEO.rim, MAT.metal
+      );
+      rim.rotation.y = Math.PI / 2;
+      wheel.add(rim);
+
+      for (let i = 0; i < 12; i++) {
+        const angle = i * Math.PI / 6;
+        const y = Math.sin(angle) * .55;
+        const z = Math.cos(angle) * .55;
+
+        tube(
+          wheel,
+          [0, 0, 0],
+          [0, y, z],
+          .008,
+          MAT.chain,
+          4
+        );
+      }
+
+      addMesh(
+        wheel,
+        GEO.smoothBlob,
+        MAT.metal,
+        [0, 0, 0],
+        [.075, .075, .075]
+      );
+
+      body.add(wheel);
+      wheels.push(wheel);
+    }
+
+    const rear = [0, .69, -.92];
+    const front = [0, .69, .97];
+    const crank = [0, .91, -.04];
+    const seat = [0, 1.49, -.44];
+    const head = [0, 1.49, .52];
+
+    // Cadre triangulaire et fourche.
+    tube(body, rear, seat, .043, frameMat);
+    tube(body, seat, crank, .048, frameMat);
+    tube(body, crank, rear, .044, frameMat);
+    tube(body, seat, head, .047, frameMat);
+    tube(body, head, crank, .047, frameMat);
+    tube(body, head, front, .043, frameMat);
+
+    // Fourche double, plus proche d'un vélo réel.
+    for (const side of [-1, 1]) {
+      tube(
+        body,
+        [side * .095, 1.39, .56],
+        [side * .095, .69, .97],
+        .025,
+        frameMat
+      );
+    }
+
+    // Selle et tige de selle.
+    tube(
+      body,
+      [0, 1.44, -.44],
+      [0, 1.68, -.52],
+      .037,
+      MAT.metal
+    );
+
+    addMesh(
+      body, GEO.box, MAT.dark,
+      [0, 1.69, -.54],
+      [.32, .065, .24]
+    );
+
+    // Plateau, transmission et pédales.
+    const chainring = new THREE.Mesh(
+      GEO.chainring,
+      MAT.metal
+    );
+    chainring.position.set(.13, .91, -.04);
+    chainring.rotation.y = Math.PI / 2;
+    body.add(chainring);
+
+    tube(
+      body,
+      [.14, .97, -.83],
+      [.14, 1.07, -.04],
+      .012,
+      MAT.chain,
+      5
+    );
+    tube(
+      body,
+      [.14, .82, -.83],
+      [.14, .75, -.04],
+      .012,
+      MAT.chain,
+      5
+    );
+
+    // Bidon et porte-bidon.
+    addMesh(
+      body, GEO.trunk, MAT.white,
+      [0, 1.17, .13],
+      [.09, .28, .09]
+    );
+
+    // Guidon de course : potence, barre et cocottes.
+    tube(
+      body,
+      [0, 1.49, .52],
+      [0, 1.76, .67],
+      .036,
+      MAT.metal
+    );
+
+    tube(
+      body,
+      [-.43, 1.76, .68],
+      [.43, 1.76, .68],
+      .038,
+      MAT.dark
+    );
+
+    for (const side of [-1, 1]) {
+      tube(
+        body,
+        [side * .41, 1.76, .68],
+        [side * .43, 1.63, .91],
+        .032,
+        MAT.dark
+      );
+
+      tube(
+        body,
+        [side * .43, 1.63, .91],
+        [side * .39, 1.46, .86],
+        .031,
+        MAT.dark
+      );
+
+      addMesh(
+        body,
+        GEO.box,
+        MAT.dark,
+        [side * .4, 1.79, .75],
+        [.075, .12, .15]
+      );
+    }
+
+    // Posture penchée d'un coureur de route.
+    addMesh(
+      body,
+      GEO.smoothBlob,
+      jerseyMat,
+      [0, 2.03, -.22],
+      [.34, .42, .43]
+    );
+
+    // Bande du maillot.
+    addMesh(
+      body,
+      GEO.box,
+      trimMat,
+      [0, 2.13, .125],
+      [.47, .09, .045],
+      false
+    );
+
+    // Poches au dos du maillot.
+    for (const px of [-.15, 0, .15]) {
+      addMesh(
+        body,
+        GEO.box,
+        jerseyMat,
+        [px, 1.83, -.52],
+        [.13, .17, .055]
+      );
+    }
+
+    // Bassin / cuissard.
+    addMesh(
+      body,
+      GEO.smoothBlob,
+      shortsMat,
+      [0, 1.7, -.38],
+      [.32, .21, .28]
+    );
+
+    // Cou et tête.
+    tube(
+      body,
+      [0, 2.37, -.02],
+      [0, 2.57, .08],
+      .10,
+      MAT.skin
+    );
+
+    addMesh(
+      body,
+      GEO.smoothBlob,
+      MAT.skin,
+      [0, 2.66, .10],
+      [.22, .24, .22]
+    );
+
+    // Casque profilé, avec bande supérieure.
+    addMesh(
+      body,
+      GEO.smoothBlob,
+      helmetMat,
+      [0, 2.84, .065],
+      [.28, .17, .32]
+    );
+
+    addMesh(
+      body,
+      GEO.box,
+      MAT.dark,
+      [0, 2.96, .08],
+      [.035, .025, .44],
+      false
+    );
+
+    addMesh(
+      body,
+      GEO.box,
+      helmetMat,
+      [0, 2.82, .31],
+      [.36, .055, .14]
+    );
+
+    // Lunettes de cyclisme.
+    addMesh(
+      body,
+      GEO.box,
+      MAT.glass,
+      [0, 2.68, .305],
+      [.38, .105, .055],
+      false
+    );
+
+    // Bras penchés sur les cocottes.
+    for (const side of [-1, 1]) {
+      tube(
+        body,
+        [side * .27, 2.26, -.03],
+        [side * .34, 2.04, .29],
+        .09,
+        jerseyMat
+      );
+
+      tube(
+        body,
+        [side * .34, 2.04, .29],
+        [side * .41, 1.82, .72],
+        .064,
+        MAT.skin
+      );
+
+      addMesh(
+        body,
+        GEO.smoothBlob,
+        glovesMat,
+        [side * .41, 1.81, .73],
+        [.10, .065, .11]
+      );
+    }
+
+    // Jambes : quatre segments repositionnés à chaque image.
+    const legs = [];
+
+    for (const side of [-1, 1]) {
+      const thigh = tube(
+        body,
+        [side * .18, 1.68, -.38],
+        [side * .2, 1.18, -.32],
+        .105,
+        shortsMat
+      );
+
+      const calf = tube(
+        body,
+        [side * .2, 1.18, -.32],
+        [side * .18, .82, -.04],
+        .073,
+        MAT.skin
+      );
+
+      const shoe = addMesh(
+        body,
+        GEO.smoothBlob,
+        shoesMat,
+        [side * .18, .76, .02],
+        [.12, .09, .22]
+      );
+
+      const pedal = addMesh(
+        body,
+        GEO.box,
+        MAT.dark,
+        [side * .19, .77, 0],
+        [.23, .035, .13]
+      );
+
+      legs.push({
+        side, thigh, calf, shoe, pedal
+      });
+    }
+
+    function animate(angle, travel, lean) {
+      for (const wheel of wheels) {
+        wheel.rotation.x += travel / .68;
+      }
+
+      chainring.rotation.x = angle;
+
+      for (const leg of legs) {
+        const phase =
+          angle + (leg.side === 1 ? Math.PI : 0);
+
+        const hip = [
+          leg.side * .19,
+          1.69,
+          -.38
+        ];
+
+        const foot = [
+          leg.side * .20,
+          .91 + Math.cos(phase) * .19,
+          -.04 + Math.sin(phase) * .22
+        ];
+
+        const knee = [
+          leg.side * .22,
+          1.29 + Math.cos(phase) * .08,
+          -.20 + Math.sin(phase) * .16
+        ];
+
+        repositionTube(
+          leg.thigh,
+          hip,
+          knee
+        );
+
+        repositionTube(
+          leg.calf,
+          knee,
+          foot
+        );
+
+        leg.shoe.position.set(
+          foot[0],
+          foot[1] - .065,
+          foot[2] + .12
+        );
+
+        leg.shoe.rotation.x =
+          Math.sin(phase) * .17;
+
+        leg.pedal.position.set(
+          foot[0],
+          foot[1] - .12,
+          foot[2]
+        );
+      }
+
+      body.rotation.z = lean;
+    }
+
+    return { root, animate };
+  }
+
+  const player = makeCyclist(
+    "#e8b25b",
+    "#dd705e",
+    "#f4e9d5"
+  );
+  scene.add(player.root);
+
+  const npcColors = [
+    ["#6da1bb", "#4c91bc"],
+    ["#e2b967", "#d8b254"],
+    ["#ad7b9e", "#bd789a"],
+    ["#72a884", "#5d9b75"],
+    ["#c87968", "#d98769"],
+    ["#a7a0bf", "#878ab2"]
+  ];
+
+  const cyclists = Array.from({
+    length: 12
+  }, (_, i) => {
+    const colors =
+      npcColors[i % npcColors.length];
+
+    const rider = makeCyclist(
+      colors[0],
+      colors[1],
+      i % 2 ? "#f0eee4" : "#273b43"
+    );
+
+    scene.add(rider.root);
+
+    return {
+      ...rider,
+      z: 42 + i * 44,
+      speed: 10.5 + (i % 5) * 1.15,
+      lane: i % 2 ? -2.65 : 2.55,
+      angle: i * 1.8
+    };
+  });
+
+  // ============================================================
+  // TOUCHES ET BOUTONS
+  // ============================================================
+
+  const input = {
+    pedal: false,
+    sprint: false,
+    brake: false,
+    left: false,
+    right: false
+  };
+
+  const keys = new Set();
+
+  const keyActions = {
+    KeyZ: "pedal",
+    KeyW: "pedal",
+    ArrowUp: "pedal",
+
+    ShiftLeft: "sprint",
+    ShiftRight: "sprint",
+
+    Space: "brake",
+
+    // Directions volontairement inversées.
+    KeyQ: "right",
+    KeyA: "right",
+    ArrowLeft: "right",
+
+    KeyD: "left",
+    ArrowRight: "left"
+  };
+
+  function refreshInput() {
+    for (const action of Object.keys(input)) {
+      const fromKeyboard =
+        [...keys].some(key =>
+          keyActions[key] === action
+        );
+
+      const fromButton =
+        [...document.querySelectorAll(
+          `[data-hold="${action}"]`
+        )].some(button =>
+          button.classList.contains("down")
+        );
+
+      input[action] =
+        fromKeyboard || fromButton;
+    }
+  }
+
+  addEventListener("keydown", event => {
+    if (keyActions[event.code]) {
+      event.preventDefault();
+      keys.add(event.code);
+      refreshInput();
+    }
+
+    if (/^Digit[1-7]$/.test(event.code)) {
+      teleport(
+        Number(event.code.slice(-1)) - 1
+      );
+    }
+  });
+
+  addEventListener("keyup", event => {
+    keys.delete(event.code);
+    refreshInput();
+  });
+
+  addEventListener("blur", () => {
+    keys.clear();
+
+    document.querySelectorAll(
+      "[data-hold]"
+    ).forEach(button =>
+      button.classList.remove("down")
+    );
+
+    refreshInput();
+  });
+
+  document.querySelectorAll(
+    "[data-hold]"
+  ).forEach(button => {
+    button.addEventListener(
+      "pointerdown",
+      event => {
+        event.preventDefault();
+        button.classList.add("down");
+        button.setPointerCapture(
+          event.pointerId
+        );
+        refreshInput();
+      }
+    );
+
+    for (const eventType of [
+      "pointerup",
+      "pointercancel",
+      "lostpointercapture"
+    ]) {
+      button.addEventListener(
+        eventType,
+        () => {
+          button.classList.remove("down");
+          refreshInput();
+        }
+      );
+    }
+  });
+
+  const regionButtons =
+    document.querySelector("#regionButtons");
+
+  REGIONS.forEach((region, i) => {
+    const button =
+      document.createElement("button");
+
+    button.textContent = region.button;
+    button.addEventListener(
+      "click",
+      () => teleport(i)
+    );
+
+    regionButtons.append(button);
+  });
+
+  // ============================================================
+  // BOUCLE DE JEU
+  // ============================================================
+
+  let x = roadX(20);
+  let z = 20;
+  let heading = 0;
+  let speed = 0;
+  let distance = 0;
+  let pedalAngle = 0;
+  let lastTime = 0;
+  let displayedRegion = -1;
+
+  function teleport(index) {
+    z = index * REGION_LENGTH + 95;
+    x = roadX(z);
+
+    heading = Math.atan2(
+      roadX(z + 2) - roadX(z - 2),
+      4
+    );
+
+    speed = Math.min(speed, 13);
+
+    cyclists.forEach((npc, i) => {
+      npc.z = z + 42 + i * 41;
+    });
+
+    updateTiles(z);
+    updateAmbience(index, 1);
+  }
+
+  function updateAmbience(index, dt) {
+    const region = REGIONS[index];
+    const t = Math.min(1, dt * 2);
+
+    skyColor.lerp(
+      new THREE.Color(region.sky),
+      t
+    );
+
+    fogColor.lerp(
+      new THREE.Color(region.fog),
+      t
+    );
+
+    sun.color.lerp(
+      new THREE.Color(region.sun),
+      t
+    );
+
+    const targetFog =
+      region.type === "forest"
+        ? .00125
+        : .00095;
+
+    scene.fog.density = lerp(
+      scene.fog.density,
+      targetFog,
+      t
+    );
+
+    if (displayedRegion !== index) {
+      displayedRegion = index;
+
+      document.querySelector(
+        "#place"
+      ).textContent = region.name;
+
+      [
+        ...regionButtons.children
+      ].forEach((button, i) => {
+        button.classList.toggle(
+          "selected",
+          i === index
+        );
+      });
+    }
+  }
+
+  function frame(time) {
+    if (!lastTime) lastTime = time;
+
+    const dt = Math.min(
+      (time - lastTime) / 1000,
+      .05
+    );
+
+    lastTime = time;
+
+    const slope =
+      (
+        roadHeight(z + 2) -
+        roadHeight(z - 2)
+      ) / 4;
+
+    const offRoad =
+      Math.abs(x - roadX(z)) >
+      ROAD_HALF - .6;
+
+    // Vitesse plus raisonnable :
+    // ~58 km/h sur le plat ;
+    // ~70 km/h en sprint ;
+    // la pente modifie la vitesse.
+    const cruising =
+      input.sprint ? 19.5 : 16;
+
+    const slopeEffect =
+      clamp(-slope * 36, -7, 8);
+
+    const target =
+      input.brake
+        ? 0
+        : input.pedal
+          ? Math.max(
+              5,
+              cruising + slopeEffect
+            )
+          : 0;
+
+    const acceleration =
+      input.brake
+        ? 13
+        : input.pedal
+          ? 5
+          : 2;
+
+    speed += clamp(
+      target - speed,
+      -acceleration * dt,
+      acceleration * dt
+    );
+
+    if (offRoad) {
+      speed = Math.min(speed, 9);
+    }
+
+    speed = Math.max(0, speed);
+
+    const steering =
+      (input.right ? 1 : 0) -
+      (input.left ? 1 : 0);
+
+    heading +=
+      steering *
+      (.32 + Math.min(speed, 25) * .012) *
+      dt;
+
+    if (!steering && !offRoad) {
+      const roadDirection =
+        Math.atan2(
+          roadX(z + 4) -
+            roadX(z - 4),
+          8
+        );
+
+      heading = lerp(
+        heading,
+        roadDirection,
+        Math.min(dt * .37, 1)
+      );
+    }
+
+    x += Math.sin(heading) * speed * dt;
+    z += Math.cos(heading) * speed * dt;
+
+    z = Math.max(2, z);
+    distance += speed * dt;
+
+    player.root.position.set(
+      x,
+      height(x, z) + .015,
+      z
+    );
+
+    player.root.rotation.y = heading;
+
+    pedalAngle +=
+      speed *
+      dt *
+      (input.pedal ? 1.1 : .2);
+
+    player.animate(
+      pedalAngle,
+      speed * dt,
+      clamp(
+        -steering * .065,
+        -.08,
+        .08
+      )
+    );
+
+    updateTiles(z);
+
+    cyclists.forEach((npc, i) => {
+      npc.z += npc.speed * dt;
+
+      if (npc.z < z - 85) {
+        npc.z =
+          z + 185 + i * 33;
+      }
+
+      if (npc.z > z + 720) {
+        npc.z =
+          z + 100 + i * 40;
+      }
+
+      const lane =
+        npc.lane +
+        Math.sin(
+          npc.z * .018 + i
+        ) * .18;
+
+      const nx =
+        roadX(npc.z) + lane;
+
+      npc.root.position.set(
+        nx,
+        height(nx, npc.z) + .015,
+        npc.z
+      );
+
+      npc.root.rotation.y =
+        Math.atan2(
+          roadX(npc.z + 2) -
+            roadX(npc.z - 2),
+          4
+        );
+
+      npc.angle +=
+        npc.speed * dt * 1.1;
+
+      npc.animate(
+        npc.angle,
+        npc.speed * dt,
+        0
+      );
+    });
+
+    const behind =
+      8.7 + speed * .17;
+
+    const desired =
+      new THREE.Vector3(
+        x - Math.sin(heading) * behind,
+        height(x, z) + 4.8 +
+          speed * .045,
+        z - Math.cos(heading) * behind
+      );
+
+    desired.y = Math.max(
+      desired.y,
+      height(
+        desired.x,
+        desired.z
+      ) + 2.8
+    );
+
+    camera.position.lerp(
+      desired,
+      1 - Math.exp(-dt * 4.6)
+    );
+
+    camera.lookAt(
+      x + Math.sin(heading) * 16,
+      height(x, z) + 1.65,
+      z + Math.cos(heading) * 16
+    );
+
+    camera.fov = lerp(
+      camera.fov,
+      68 + Math.min(speed * .35, 10),
+      Math.min(dt * 3, 1)
+    );
+
+    camera.updateProjectionMatrix();
+
+    // Les montagnes suivent le joueur,
+    // pour conserver un horizon immense.
+    horizon.position.set(
+      x,
+      roadHeight(z),
+      z
+    );
+
+    sun.position.set(
+      x - 65,
+      height(x, z) + 115,
+      z + 75
+    );
+
+    sun.target.position.set(
+      x,
+      height(x, z),
+      z
+    );
+
+    sun.target.updateMatrixWorld();
+
+    updateAmbience(
+      regionIndex(z),
+      dt
+    );
+
+    document.querySelector(
+      "#speed"
+    ).textContent =
+      `${Math.round(speed * 3.6)} km/h`;
+
+    document.querySelector(
+      "#info"
+    ).textContent =
+      `${(distance / 1000)
+        .toFixed(2)
+        .replace(".", ",")} km · ` +
+      (
+        slope > .025
+          ? "montée ↗"
+          : slope < -.025
+            ? "descente ↘"
+            : "terrain doux →"
+      ) +
+      (
+        offRoad
+          ? " · hors route"
+          : ""
+      );
+
+    renderer.render(
+      scene,
+      camera
+    );
+  }
+
+  updateTiles(z);
+
+  camera.position.set(
+    x,
+    height(x, z) + 6,
+    z - 10
+  );
+
+  renderer.setAnimationLoop(frame);
+
+  addEventListener("resize", () => {
+    camera.aspect =
+      innerWidth / innerHeight;
+
+    camera.updateProjectionMatrix();
+
+    renderer.setSize(
+      innerWidth,
+      innerHeight
+    );
+
+    renderer.setPixelRatio(
+      Math.min(
+        devicePixelRatio,
+        1.6
+      )
+    );
+  });
+
+} catch (error) {
+  const box =
+    document.querySelector("#error");
+
+  box.style.display = "block";
+  box.textContent =
+    "Impossible de lancer le jeu : " +
+    error.message;
+
+  console.error(error);
+}
+</script>
+</body>
+</html>
